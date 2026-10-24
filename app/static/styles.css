@@ -1,0 +1,26 @@
+* { box-sizing: border-box; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f5f6f8; color: #1c1c1c; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #111; color: #fff; }
+header h1 { font-size: 18px; margin: 0; }
+.tag { background: #ef3124; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+nav button { margin-right: 8px; }
+main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+.hidden { display: none !important; }
+button { padding: 6px 12px; border: none; border-radius: 4px; background: #ef3124; color: #fff; cursor: pointer; }
+button.secondary { background: #555; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+input { padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 100%; }
+label { display: block; margin-bottom: 10px; }
+.card { background: #fff; border-radius: 6px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+.error { color: #b00020; }
+.hint { color: #666; font-size: 12px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; }
+th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; vertical-align: top; }
+tr.clickable:hover { background: #f0f0f0; cursor: pointer; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; color: #fff; }
+.badge.risk { background: #b00020; }
+.badge.opportunity { background: #0a7c2f; }
+.badge.neutral { background: #666; }
+.step { border-left: 3px solid #ef3124; padding: 8px 12px; margin-bottom: 12px; background: #fff; }
+.step pre { background: #f4f4f4; padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 12px; max-height: 240px; }
+.mono { font-family: monospace; font-size: 12px; }

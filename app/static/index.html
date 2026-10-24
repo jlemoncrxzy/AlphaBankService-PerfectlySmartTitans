@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <title>Alfa Insight MVP</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body>
+<header>
+  <h1>Alfa Insight <span class="tag">MVP</span></h1>
+  <nav id="nav" class="hidden">
+    <button data-view="clients">Клиенты</button>
+    <button data-view="news">Новости/Аналитика</button>
+    <button data-view="runs">Запуски</button>
+    <span id="whoami"></span>
+    <button id="logout">Выйти</button>
+  </nav>
+</header>
+<main id="app">
+  <!-- экран логина -->
+  <section id="login-screen">
+    <h2>Вход</h2>
+    <form id="login-form">
+      <label>Логин <input name="username" value="analyst" required/></label>
+      <label>Пароль <input name="password" type="password" value="analyst123" required/></label>
+      <button type="submit">Войти</button>
+    </form>
+    <p class="hint">Тестовые учётки: admin/admin123 (admin), analyst/analyst123 (analyst), viewer/viewer123 (viewer)</p>
+    <p id="login-error" class="error"></p>
+  </section>
+  <section id="view" class="hidden"></section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
