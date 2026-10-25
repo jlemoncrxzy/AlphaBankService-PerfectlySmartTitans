@@ -183,34 +183,27 @@ async function viewClients(page = 1) {
 }
 
 async function viewNews() {
-  const [news, analytics] = await Promise.all([
-    api("/api/news?limit=30"),
-    api("/api/analytics?limit=30"),
-  ]);
+  const items = await api("/api/news?limit=50");
+  
   $("view").innerHTML = `
-    <h2>Новости</h2>
+    <h2>Лента событий (Новости и Аналитика)</h2>
     <table>
-      <thead><tr><th>Дата</th><th>Заголовок</th><th>Источник</th><th>Magnitude</th></tr></thead>
+      <thead><tr><th>Дата</th><th>Тип</th><th>Заголовок</th><th>Источник</th></tr></thead>
       <tbody>
-        ${news.map(n => `
-          <tr>
-            <td>${fmtDate(n.published_at)}</td>
-            <td>${escapeHtml(n.title)}<br/><span class="hint">${escapeHtml(n.body || "")}</span></td>
+        ${items.map(n => `
+          <tr style="${n.type === 'pdf' ? 'border-left: 4px solid #ef3124; background: #fafafa;' : ''}">
+            <td style="white-space: nowrap;">${fmtDate(n.published_at)}</td>
+            <td>
+              ${n.type === 'pdf' 
+                ? `<span class="badge" style="background:#ef3124">PDF Аналитика</span>` 
+                : `<span class="badge" style="background:#555">Новость</span>`}
+            </td>
+            <td>
+              <b>${escapeHtml(n.title)}</b><br/>
+              <span class="hint">${escapeHtml((n.body || "").substring(0, 300))}${n.body && n.body.length > 300 ? "..." : ""}</span>
+            </td>
             <td>${escapeHtml(n.source)}</td>
-            <td>${n.magnitude.toFixed(2)}</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
-    <h2 style="margin-top:24px">Аналитика Альфа-Банка</h2>
-    <table>
-      <thead><tr><th>Дата</th><th>Заголовок</th><th>Категория</th></tr></thead>
-      <tbody>
-        ${analytics.map(a => `
-          <tr>
-            <td>${fmtDate(a.published_at)}</td>
-            <td>${escapeHtml(a.title)}<br/><span class="hint">${escapeHtml(a.body || "")}</span></td>
-            <td>${escapeHtml(a.category)}</td>
-          </tr>`).join("")}
+          </tr>`).join("") || `<tr><td colspan="4" class="hint">Нет данных</td></tr>`}
       </tbody>
     </table>
   `;

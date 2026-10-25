@@ -7,6 +7,7 @@ from ..config import settings
 from ..database import SessionLocal
 from ..models import AnalysisRun, RunStep, EventInsight, Client, User
 from ..llm.client import LLMClient
+from ..llm.heuristics import HeuristicInterpreter
 from . import tools
 from .ranking import score_event
 
@@ -131,17 +132,54 @@ def _step_retrieve(db: Session, ctx: PipelineContext) -> None:
 
 def _step_rank(db: Session, ctx: PipelineContext, client: Client) -> None:
     with _StepRecorder(db, ctx, 3, "rank", {"candidates": len(ctx.candidates), "max_events": settings.max_events_per_run}) as step:
+        interpreter = HeuristicInterpreter()
         scored = []
         for c in ctx.candidates:
-            s, breakdown = score_event(c, ctx.client_ctx, ctx.client_ctx)
-            scored.append({**c, "score": s, "breakdown": breakdown})
+            score, breakdown = score_event(c, ctx.client_ctx, ctx.client_ctx)
+            kind = interpreter.interpret(
+                ctx.client_ctx, ctx.client_ctx, c, c["source_type"], []
+            ).get("kind", "neutral")
+            scored.append({**c, "score": score, "breakdown": breakdown, "kind_hint": kind})
+
         scored.sort(key=lambda x: x["score"], reverse=True)
-        ctx.ranked = [x for x in scored if x["score"] > 0.15][: settings.max_events_per_run]
-        if not ctx.ranked and scored:
-            ctx.ranked = scored[: min(3, settings.max_events_per_run)]
+        limit = settings.max_events_per_run
+        selected = [x for x in scored if x["score"] > 0.15][:limit]
+        if not selected and scored:
+            selected = scored[: min(3, limit)]
+
+        # Даже при близких score не теряем риск или возможность:
+        # заменяем самый слабый нейтральный документ на лучший из нужного типа.
+        def ensure_kind(kind: str) -> None:
+            if any(item["kind_hint"] == kind for item in selected):
+                return
+            candidate = next(
+                (item for item in scored if item["kind_hint"] == kind and item not in selected),
+                None,
+            )
+            if candidate is None or not selected:
+                return
+            replaceable = sorted(
+                selected,
+                key=lambda item: (item["kind_hint"] != "neutral", item["score"]),
+            )
+            selected.remove(replaceable[0])
+            selected.append(candidate)
+
+        ensure_kind("risk")
+        ensure_kind("opportunity")
+        selected.sort(key=lambda x: x["score"], reverse=True)
+        ctx.ranked = selected[:limit]
+
         step.output = {
             "selected": [
-                {"id": r["id"], "title": r["title"], "score": r["score"], "breakdown": r["breakdown"], "source_type": r["source_type"]}
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "score": r["score"],
+                    "kind_hint": r["kind_hint"],
+                    "breakdown": r["breakdown"],
+                    "source_type": r["source_type"],
+                }
                 for r in ctx.ranked
             ],
         }

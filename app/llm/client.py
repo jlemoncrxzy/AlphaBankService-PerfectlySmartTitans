@@ -3,8 +3,16 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+
 import httpx
+
 from ..config import settings
+from .heuristics import (
+    HeuristicInterpreter as RuleBasedInterpreter,
+    build_chat_answer,
+)
+from .text import clean_list, clean_text, summarize_text
+
 
 @dataclass
 class LLMResult:
@@ -14,38 +22,59 @@ class LLMResult:
     fallback: bool = False
     error: str = ""
 
+
+@dataclass
+class ChatResult:
+    answer: str
+    provider: str
+    model: str
+    fallback: bool = False
+    error: str = ""
+
 SYSTEM_PROMPT = (
     "Ты — AI-аналитик Альфа-Банка для руководителей крупного бизнеса. "
-    "Твоя задача — не пересказать новость или PDF-отчет, а объяснить, как событие влияет "
-    "именно на этого клиента (риски/возможности), с опорой на его профиль. "
-    "ОБЯЗАТЕЛЬНО используй предоставленный контекст из PDF-отчетов, если он относится к делу. "
+    "По документу и профилю клиента определи риск, возможность или нейтральное событие, "
+    "объясни влияние именно на этого клиента и предложи конкретные действия. "
+    "Пиши короткими законченными предложениями, без OCR-артефактов, лишних точек с запятой "
+    "и случайного регистра. Не выдумывай цифры, которых нет в документе. "
     "Отвечай строго валидным JSON без markdown-обёрток."
 )
 
 USER_TEMPLATE = """Профиль клиента:
 {profile}
 
-Событие ({source_type}):
+Документ ({source_type}):
 title: {title}
 body: {body}
 entities: {entities}
 industries: {industries}
 regions: {regions}
 
-Дополнительный контекст из аналитических PDF-отчетов Альфа-Банка (RAG):
+Контекст из аналитических PDF-отчетов Альфа-Банка (RAG):
 {rag}
 
-ИНСТРУКЦИЯ: Объясни влияние события на клиента. Свяжи факты из новости или PDF с профилем клиента. 
-ВАЖНО: Ты ОБЯЗАН найти хотя бы один риск или возможность. Отвечать "neutral" запрещено, если событие хоть как-то связано с отраслью, регионом или контрагентом клиента (даже если это макроэкономический отчет). Если прямых совпадений нет, оцени косвенное влияние на бизнес.
+Определи влияние документа на клиента.
+
+Правила:
+- kind=risk, если событие может ухудшить выручку, маржу, ликвидность или условия финансирования.
+- kind=opportunity, если событие может улучшить выручку, маржу, условия закупок или финансирования.
+- kind=neutral только если прямого влияния действительно нет.
+- Не называй риск возможностью и наоборот.
+- recommended_actions — конкретные выполнимые действия (2-4), без общих фраз.
+- cta — короткая кнопка на 2-4 слова.
+- Текст должен быть чистым и связным: без OCR-мусора, обрывов и лишних точек с запятой.
 
 Верни JSON:
 {{
-  "kind": "risk" | "opportunity",
-  "headline": "краткая персонализированная формулировка",
-  "mechanism": "почему это важно ИМЕННО для этого клиента (со ссылкой на данные из PDF, если они есть)",
-  "affected_business_lines": ["..."],
+  "kind": "risk" | "opportunity" | "neutral",
   "confidence": 0.0-1.0,
+  "headline": "краткий заголовок до 90 символов",
+  "summary": "1-2 предложения: что произошло",
+  "details": "3-5 предложений: что произошло подробнее",
+  "mechanism": "2-3 предложения: почему это важно именно для этого клиента",
+  "affected_business_lines": ["..."],
   "recommended_actions": ["..."],
+  "cta": "короткая кнопка",
   "caveats": ["..."]
 }}
 """
@@ -54,55 +83,194 @@ class LLMClient:
     def __init__(self):
         self.provider = settings.llm_provider
         self.model_name = settings.llm_model
-        self._heuristic = HeuristicInterpreter()
+        self._heuristic = RuleBasedInterpreter()
 
     def interpret_event(
         self, client_ctx: dict, profile: dict, event: dict,
         source_type: str, rag_snippets: list[str],
     ) -> LLMResult:
+        # Fallback считаем заранее: он же заполнит поля, которые LLM пропустит.
+        fallback = self._heuristic.interpret(
+            client_ctx, profile, event, source_type, rag_snippets
+        )
+
         if self.provider == "deepseek" and settings.deepseek_api_key:
             try:
-                payload = self._call_deepseek(client_ctx, profile, event, source_type, rag_snippets)
-                return LLMResult(payload=payload, provider="deepseek", model=self.model_name, fallback=False)
-            except Exception as e:
-                payload = self._heuristic.interpret(client_ctx, profile, event, source_type, rag_snippets)
-                return LLMResult(payload=payload, provider="heuristic", model="heuristic-v1", fallback=True, error=str(e))
-        
-        payload = self._heuristic.interpret(client_ctx, profile, event, source_type, rag_snippets)
-        return LLMResult(payload=payload, provider="heuristic", model="heuristic-v1", fallback=False)
+                payload = self._call_deepseek(
+                    client_ctx, profile, event, source_type, rag_snippets
+                )
+                return LLMResult(
+                    payload=_normalize_payload(payload, fallback),
+                    provider="deepseek",
+                    model=self.model_name,
+                    fallback=False,
+                )
+            except Exception as error:
+                return LLMResult(
+                    payload=fallback,
+                    provider="heuristic",
+                    model="heuristic-v1",
+                    fallback=True,
+                    error=str(error),
+                )
+
+        return LLMResult(
+            payload=fallback,
+            provider="heuristic",
+            model="heuristic-v1",
+            fallback=False,
+        )
+
+    def answer_question(
+        self,
+        question: str,
+        client_ctx: dict,
+        insight: dict,
+        siblings: list[dict],
+        rag_snippets: list[str] | None = None,
+    ) -> ChatResult:
+        fallback = build_chat_answer(question, client_ctx, insight, siblings)
+
+        if self.provider == "deepseek" and settings.deepseek_api_key:
+            try:
+                answer = self._call_deepseek_chat(
+                    question, client_ctx, insight, siblings, rag_snippets or []
+                )
+                return ChatResult(
+                    answer=answer.strip(),
+                    provider="deepseek",
+                    model=self.model_name,
+                    fallback=False,
+                )
+            except Exception as error:
+                return ChatResult(
+                    answer=fallback,
+                    provider="heuristic",
+                    model="heuristic-v1",
+                    fallback=True,
+                    error=str(error),
+                )
+
+        return ChatResult(
+            answer=fallback,
+            provider="heuristic",
+            model="heuristic-v1",
+            fallback=False,
+        )
+
+    def _post(self, messages: list[dict], temperature: float = 0.2, json_mode: bool = True) -> str:
+        url = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        with httpx.Client(timeout=settings.tool_timeout_seconds * 3) as client:
+            response = client.post(
+                url,
+                headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        content = data["choices"][0]["message"]["content"]
+        if not content or not content.strip():
+            raise ValueError("DeepSeek вернул пустой ответ")
+        return content
 
     def _call_deepseek(self, client_ctx, profile, event, source_type, rag_snippets) -> dict:
+        profile_payload = {
+            "industry": client_ctx.get("industry"),
+            "scale_revenue_rub": client_ctx.get("scale_revenue_rub"),
+            "products": client_ctx.get("products"),
+            "regions": client_ctx.get("regions"),
+            "counterparties": client_ctx.get("counterparties"),
+            "risk_notes": client_ctx.get("risk_notes"),
+        }
         user = USER_TEMPLATE.format(
-            profile=json.dumps({"industry": client_ctx.get("industry"), "profile": profile}, ensure_ascii=False),
+            profile=json.dumps(profile_payload, ensure_ascii=False),
             source_type=source_type,
             title=event.get("title", ""),
             body=event.get("body", ""),
             entities=json.dumps(event.get("entities", []), ensure_ascii=False),
             industries=json.dumps(event.get("industries", []), ensure_ascii=False),
             regions=json.dumps(event.get("regions", []), ensure_ascii=False),
-            rag="\n".join(f"- {s}" for s in rag_snippets[:3]) or "нет",
+            rag="\n".join(f"- {snippet}" for snippet in rag_snippets[:3]) or "нет",
         )
-        
-        # Исправленный URL (без /v1 в конце, если он уже есть в базовом)
-        url = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
-        
-        with httpx.Client(timeout=settings.tool_timeout_seconds * 3) as client:
-            r = client.post(
-                url,
-                headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
-                json={
-                    "model": self.model_name,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": 0.2,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"]
+        content = self._post(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.2,
+            json_mode=True,
+        )
         return _parse_json(content)
+
+    def _call_deepseek_chat(
+        self,
+        question: str,
+        client_ctx: dict,
+        insight: dict,
+        siblings: list[dict],
+        rag_snippets: list[str],
+    ) -> str:
+        system = (
+            "Ты — AI-ассистент Альфа-Бизнеса. Отвечай руководителю крупного бизнеса по-русски. "
+            "Используй только предоставленный контекст: профиль клиента, выбранный документ, "
+            "сводку по остальным событиям и базу знаний банка. Не выдумывай цифры. "
+            "Формат ответа — короткая сводка: вывод, что произошло, почему это важно для клиента, "
+            "что можно сделать и ограничения. Пиши короткими предложениями, без markdown."
+        )
+        context = {
+            "client": {
+                "name": client_ctx.get("name"),
+                "industry": client_ctx.get("industry"),
+                "revenue_rub": client_ctx.get("revenueRub"),
+                "products": client_ctx.get("products"),
+                "regions": client_ctx.get("regions"),
+                "payments": client_ctx.get("payments"),
+            },
+            "selected_document": {
+                "title": insight.get("title"),
+                "summary": insight.get("summary"),
+                "details": insight.get("details"),
+                "kind": insight.get("type"),
+                "confidence": insight.get("confidence"),
+                "mechanism": insight.get("impact"),
+                "actions": insight.get("actions"),
+                "caveats": insight.get("caveats"),
+                "source": insight.get("source"),
+            },
+            "other_events": [
+                {
+                    "title": item.get("title"),
+                    "kind": item.get("type"),
+                    "summary": item.get("summary"),
+                }
+                for item in siblings[:6]
+            ],
+        }
+        user = (
+            "Контекст:\n"
+            + json.dumps(context, ensure_ascii=False, indent=2)
+            + "\n\nБаза знаний банка:\n"
+            + ("\n".join(f"- {snippet}" for snippet in rag_snippets[:4]) or "нет")
+            + f"\n\nВопрос клиента: {question}\n\n"
+            + "Ответь структурированной сводкой. Если данных не хватает, честно скажи об этом."
+        )
+        return self._post(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.3,
+            json_mode=False,
+        )
 
 def _parse_json(text: str) -> dict:
     text = text.strip()
@@ -111,79 +279,55 @@ def _parse_json(text: str) -> dict:
         text = re.sub(r"\s*```$", "", text)
     return json.loads(text)
 
-class HeuristicInterpreter:
-    def interpret(self, client_ctx: dict, profile: dict, event: dict, source_type: str, rag_snippets: list[str] = None) -> dict:
-        title = event.get("title", "") or "Событие без заголовка"
-        body = event.get("body", "") or ""
-        entities = [str(e).lower() for e in event.get("entities", []) or []]
-        regions  = [str(r).lower() for r in event.get("regions", []) or []]
-        industries = [str(i).lower() for i in event.get("industries", []) or []]
 
-        profile_cps = profile.get("counterparties", []) or []
-        profile_regions = [str(r).lower() for r in profile.get("regions", []) or []]
-        profile_products = profile.get("products", []) or []
-        client_industry = (client_ctx.get("industry") or "").lower()
+def _normalize_payload(payload: dict, fallback: dict) -> dict:
+    """Приводит ответ LLM к единому виду и чистит текст."""
+    merged = dict(fallback)
+    for key, value in (payload or {}).items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
 
-        matched_cps = [cp for cp in profile_cps if cp.get("name", "").lower() in entities]
-        matched_regions = [r for r in event.get("regions", []) or [] if str(r).lower() in profile_regions]
-        industry_match = client_industry and client_industry in industries
+    kind = str(merged.get("kind") or "neutral").lower()
+    if kind not in {"risk", "opportunity", "neutral"}:
+        kind = fallback.get("kind", "neutral")
+    merged["kind"] = kind
 
-        mechanism_parts = []
-        affected = []
-        kind = "risk"
-        confidence = 0.4
+    try:
+        confidence = float(merged.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = float(fallback.get("confidence", 0.5))
+    merged["confidence"] = round(max(0.0, min(1.0, confidence)), 2)
 
-        for cp in matched_cps:
-            role = cp.get("role", "")
-            name = cp.get("name", "")
-            share = cp.get("share", "")
-            if role == "supplier":
-                kind = "risk"
-                mechanism_parts.append(f"«{name}» — ваш поставщик (доля {share}). Событие влияет на себестоимость.")
-                affected.append("Закупки")
-            elif role == "customer":
-                kind = "risk"
-                mechanism_parts.append(f"«{name}» — ваш клиент (доля {share}). Изменение спроса влияет на выручку.")
-                affected.append("Выручка")
-            elif role == "competitor":
-                kind = "opportunity"
-                mechanism_parts.append(f"«{name}» — конкурент. Его проблемы открывают возможности.")
-                affected.append("Доля рынка")
-            confidence = min(0.95, confidence + 0.2)
-
-        if matched_regions:
-            mechanism_parts.append(f"Событие затрагивает ваш регион: {', '.join(matched_regions)}.")
-            affected.append("Регион")
-            confidence = min(0.95, confidence + 0.1)
-
-        if industry_match:
-            mechanism_parts.append(f"Событие относится к вашей отрасли «{client_ctx.get('industry')}».")
-            affected.append("Отрасль")
-            confidence = min(0.95, confidence + 0.15)
-            
-            if source_type == "analytic":
-                text_lower = (title + " " + body).lower()
-                if any(w in text_lower for w in ["рост", "увеличение", "возможности", "поддержка", "субсиди", "льгот"]):
-                    kind = "opportunity"
-                if any(w in text_lower for w in ["падение", "снижение", "риск", "кризис", "проблем", "пошлин"]):
-                    kind = "risk"
-
-        if rag_snippets:
-            mechanism_parts.append("В анализе учтены данные из отчетов Альфа-Банка.")
-            affected.append("Аналитика")
-            confidence = min(0.95, confidence + 0.1)
-
-        if not mechanism_parts:
-            mechanism_parts.append("Оценивается общее влияние на бизнес-среду. Рекомендован мониторинг.")
-            affected.append("Общий мониторинг")
-            confidence = 0.3
-
-        return {
-            "kind": kind,
-            "headline": title,
-            "mechanism": " ".join(mechanism_parts),
-            "affected_business_lines": affected or ["Общий мониторинг"],
-            "confidence": round(confidence, 2),
-            "recommended_actions": ["Проверить контрагентов", "Оценить бюджет"] if kind == "risk" else ["Оценить новые возможности"],
-            "caveats": ["Сформировано автоматически (offline)."],
-        }
+    merged["headline"] = clean_text(
+        str(merged.get("headline") or fallback.get("headline") or "")
+    )[:140]
+    merged["summary"] = (
+        summarize_text(str(merged.get("summary") or ""), max_sentences=2, max_chars=280)
+        or fallback.get("summary", "")
+    )
+    merged["details"] = (
+        summarize_text(str(merged.get("details") or ""), max_sentences=5, max_chars=700)
+        or fallback.get("details", "")
+        or merged["summary"]
+    )
+    merged["mechanism"] = (
+        summarize_text(str(merged.get("mechanism") or ""), max_sentences=3, max_chars=420)
+        or fallback.get("mechanism", "")
+    )
+    merged["affected_business_lines"] = clean_list(
+        merged.get("affected_business_lines") or fallback.get("affected_business_lines"),
+        limit=4,
+    )
+    merged["recommended_actions"] = clean_list(
+        merged.get("recommended_actions") or fallback.get("recommended_actions"),
+        limit=5,
+    )
+    merged["caveats"] = clean_list(
+        merged.get("caveats") or fallback.get("caveats"),
+        limit=2,
+    )
+    merged["cta"] = (
+        clean_text(str(merged.get("cta") or fallback.get("cta") or ""))[:40]
+        or "Мониторинг"
+    )
+    return merged
