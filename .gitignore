@@ -1,5 +1,5 @@
 # ==========================================
-# 1. Python & Virtual Environment
+# 1. Python & виртуальное окружение
 # ==========================================
 __pycache__/
 *.py[cod]
@@ -10,42 +10,70 @@ __pycache__/
 venv/
 env/
 ENV/
+.eggs/
+*.egg-info/
+build/
+dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 .coverage
+.coverage.*
 htmlcov/
+site/
 
 # ==========================================
 # 2. Переменные окружения и секреты
 # ==========================================
-# Игнорируем реальные ключи, но оставляем шаблон
 .env
 .env.local
 .env.*
 !.env.example
+!**/.env.example
+*.pem
+*.key
 
 # ==========================================
 # 3. Базы данных и локальные данные
 # ==========================================
-# SQLite база и её WAL-файлы
 *.db
 *.sqlite3
 *.db-wal
 *.db-shm
 
-# Исходные данные заказчика и PDF (чтобы не залить гигабайты в Git)
-data/
+# Исходные данные заказчика, PDF и выгрузки — слишком тяжёлые для Git.
+# Используем data/* (а не data/), иначе whitelist-правила ниже не сработают.
+data/*
 !data/.gitkeep
+!data/report_template_example.docx
 
 # ==========================================
-# 4. IDE, ОС и мусор
+# 4. Node / фронтенд
+# ==========================================
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ==========================================
+# 5. IDE, ОС и мусор
 # ==========================================
 .vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
+*.iml
 .DS_Store
 Thumbs.db
+desktop.ini
+nul
 *.log
 logs/
 *.tmp
 *.bak
+~$*

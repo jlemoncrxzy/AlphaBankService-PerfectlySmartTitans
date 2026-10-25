@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# --- Парсинг и рендер PDF (app/debug_ingest_pdf.py) ---
+pdfplumber==0.11.10
+pymupdf==2.0
+numpy==2.5.4
+pillow==13.0.0
+pypdf==6.21.2
+
+# --- OCR (сканы без текстового слоя) — тянет torch ~2.5 ГБ ---
+easyocr==1.7.2
