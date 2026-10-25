@@ -45,9 +45,9 @@ site/
 
 # Исходные данные заказчика, PDF и выгрузки — слишком тяжёлые для Git.
 # Используем data/* (а не data/), иначе whitelist-правила ниже не сработают.
-#data/*
-#!data/.gitkeep
-#!data/report_template_example.docx
+data/*
+!data/.gitkeep
+!data/report_template_example.docx
 
 # ==========================================
 # 4. Node / фронтенд
