@@ -108,6 +108,7 @@ def format_client(
     regions = list(profile.regions or []) if profile else []
     products = list(profile.products or []) if profile else []
     counterparties = list(profile.counterparties or []) if profile else []
+    keywords = list(profile.keywords or []) if profile else []
 
     uid = _uid(client.name)
     stats = (payment_stats or {}).get(uid or "", {}) or {}
@@ -122,6 +123,7 @@ def format_client(
         "regions": regions,
         "region": ", ".join(regions[:3]),
         "products": products,
+        "keywords": keywords,
         "counterpartiesCount": len(counterparties),
         "insightsCount": insights_count,
         "payments": {
@@ -239,6 +241,108 @@ def format_insight(
         "model": model,
         "fallback": fallback,
     }
+
+
+def _impact_kind(insight: EventInsight) -> str:
+    kind = (insight.impact or {}).get("kind")
+    return kind if kind in KINDS else "neutral"
+
+
+def _analytics_series(db: Session, client_id: int, limit: int = 8) -> dict:
+    """Снимки ленты по последним запускам клиента для графика «Аналитика».
+
+    Каждый запуск — одна точка: сколько в нём было рисков, возможностей и
+    нейтральных событий. Точки отдаются от старых к новым.
+    """
+    runs_with_insights = db.query(EventInsight.run_id).distinct()
+    runs = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.client_id == client_id,
+            AnalysisRun.id.in_(runs_with_insights),
+        )
+        .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    unique_runs: list[AnalysisRun] = []
+    seen: set[int] = set()
+    for run in runs:
+        if run.id in seen:
+            continue
+        seen.add(run.id)
+        unique_runs.append(run)
+
+    run_ids = [run.id for run in unique_runs]
+    insights = (
+        db.query(EventInsight).filter(EventInsight.run_id.in_(run_ids)).all()
+        if run_ids
+        else []
+    )
+
+    counters: dict[int, dict[str, int]] = {}
+    for insight in insights:
+        bucket = counters.setdefault(
+            insight.run_id, {"risk": 0, "opportunity": 0, "neutral": 0}
+        )
+        bucket[_impact_kind(insight)] += 1
+
+    series = []
+    for run in reversed(unique_runs):
+        counts = counters.get(run.id, {"risk": 0, "opportunity": 0, "neutral": 0})
+        series.append({
+            "runId": str(run.id),
+            "at": _iso_utc(run.finished_at or run.created_at),
+            "risks": counts["risk"],
+            "opportunities": counts["opportunity"],
+            "events": counts["neutral"],
+        })
+
+    return {"series": series, "runs": len(series)}
+
+
+def _analytics_month(db: Session, client_id: int) -> list[dict]:
+    """Уникальные сигналы клиента по дням текущего месяца.
+
+    Один и тот же документ может встречаться в нескольких запусках — внутри дня
+    считаем его один раз, чтобы дневные значения не раздувались.
+    """
+    month_start = datetime.utcnow().replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    rows = (
+        db.query(EventInsight, AnalysisRun)
+        .join(AnalysisRun, AnalysisRun.id == EventInsight.run_id)
+        .filter(
+            AnalysisRun.client_id == client_id,
+            AnalysisRun.created_at >= month_start,
+        )
+        .all()
+    )
+
+    days: dict[str, dict] = {}
+    seen: set[tuple[str, str, int]] = set()
+    for insight, run in rows:
+        at = run.finished_at or run.created_at
+        key = at.date().isoformat()
+        dedupe = (key, insight.source_type, insight.source_id)
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        bucket = days.setdefault(
+            key,
+            {"date": key, "risks": 0, "opportunities": 0, "events": 0},
+        )
+        kind = _impact_kind(insight)
+        if kind == "risk":
+            bucket["risks"] += 1
+        elif kind == "opportunity":
+            bucket["opportunities"] += 1
+        else:
+            bucket["events"] += 1
+
+    return [days[key] for key in sorted(days)]
 
 
 def _unique_insights(insights: list[EventInsight], limit: int = 10) -> list[EventInsight]:
@@ -409,6 +513,10 @@ def get_dashboard(
             {"label": "Возможности роста", "value": opportunities_count, "color": "honey"},
             {"label": "Компаний в мониторинге", "value": int(companies_with_insights), "color": "dark"},
         ],
+        "analytics": {
+            **_analytics_series(db, client.id),
+            "month": _analytics_month(db, client.id),
+        },
         "meta": {
             "generatedAt": _iso_utc(generated_at),
             "companiesWithInsights": int(companies_with_insights),
@@ -474,4 +582,8 @@ def chat_with_news(news_id: str, req: ChatRequest, db: Session = Depends(get_db)
         "provider": result.provider,
         "model": result.model,
         "fallback": result.fallback,
+        "chart": {
+            "title": "Динамика сигналов по компании",
+            "series": _analytics_series(db, client.id)["series"] if client else [],
+        },
     }
