@@ -115,7 +115,7 @@ def promo_art():
             return FileResponse(candidate, headers={"Cache-Control": SHORT_CACHE})
     raise HTTPException(status_code=404, detail="Not Found")
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "ok",
@@ -124,7 +124,8 @@ def health():
         "frontend_built": INDEX_FILE.is_file(),
     }
 
-@app.get("/", include_in_schema=False)
+# HEAD нужен health-check'ам хостингов (Render шлёт `HEAD /`, иначе 405 в логах).
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def index():
     return _index_response()
 

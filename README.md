@@ -287,14 +287,32 @@ npm run build      # прод-сборка в frontend/dist, её раздаёт
 
 ### 7. Деплой (важно про статику)
 
-`frontend/dist/` в `.gitignore`, поэтому на сервере UI нужно собрать **после** `git pull`:
+Собранный UI (`frontend/dist/`) **коммитится в репозиторий**: Render и подобные PaaS
+деплоят только содержимое git и не запускают `npm run build`. Раньше `dist/` был в
+`.gitignore`, из-за этого в репозиторий попали только `index.html` и `icons/`, а
+`assets/*.js|css` — нет, и браузер получал 404 на все скрипты и стили.
+
+Порядок работы:
 
 ```bash
-cd frontend && npm ci && npm run build && cd ..
-# проверить, что на месте и index.html, и хэшированные файлы:
-ls frontend/dist/index.html frontend/dist/assets/
+# после любых изменений в frontend/src
+cd frontend && npm run build && cd ..
+git add frontend/dist && git commit -m "build: frontend" && git push
+
+# локальный/серверный запуск
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
+
+Проверка после деплоя: `GET /health` → `"frontend_built": true`, в логах нет строки
+`Сборка frontend неполная/устаревшая`.
+
+Альтернатива (если не хотите хранить сборку в git) — задать в Render Build Command:
+
+```bash
+pip install -r requirements.txt && cd frontend && npm ci && npm run build
+```
+
+и убрать `frontend/dist` из репозитория (`git rm -r --cached frontend/dist`).
 
 Что делает `app/main.py`:
 
@@ -306,12 +324,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
   `immutable`: браузер/CDN не хранит старый HTML со ссылками на удалённые `/assets/*`;
 - на старте проверяет сборку и пишет в лог, каких файлов из `index.html` не хватает:
   `Сборка frontend неполная/устаревшая: index.html ссылается на отсутствующие файлы ...`;
-- `GET /health` показывает `"frontend_built": true|false` — быстрая проверка на хосте.
+- `GET /health` показывает `"frontend_built": true|false` — быстрая проверка на хосте;
+- `/` и `/health` отвечают и на `HEAD` (health-check Render больше не пишет `405`).
 
 Если в прод-логах `GET /assets/*.js 404`, а `/` отдаётся — значит на сервере нет
-`frontend/dist/assets` (не собрано / не задеплоено). Лечится пересборкой выше;
-после деплоя сбросьте кэш `index.html` в CDN (Cloudflare: Purge Everything или
-by URL `/`).
+`frontend/dist/assets` (не собрано / не закоммичено). После деплоя сбросьте кэш
+`index.html` в CDN (Cloudflare: Purge Everything или by URL `/`).
 
 ---
 
