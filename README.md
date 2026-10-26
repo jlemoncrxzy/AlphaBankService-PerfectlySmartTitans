@@ -285,6 +285,34 @@ npm run dev        # dev-сервер + прокси /api → :8000
 npm run build      # прод-сборка в frontend/dist, её раздаёт FastAPI на "/"
 ```
 
+### 7. Деплой (важно про статику)
+
+`frontend/dist/` в `.gitignore`, поэтому на сервере UI нужно собрать **после** `git pull`:
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+# проверить, что на месте и index.html, и хэшированные файлы:
+ls frontend/dist/index.html frontend/dist/assets/
+uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+Что делает `app/main.py`:
+
+- статику ищет от корня проекта (`Path(__file__).parent.parent`), а не от текущей рабочей
+  директории — запуск uvicorn из другого каталога больше не ломает `/assets`;
+- монтирует `/assets` и `/icons` **безусловно**, поэтому пересборка UI подхватывается
+  без перезапуска сервера и без «404 на всё»;
+- отдаёт `index.html` с `Cache-Control: no-store`, а хэшированные файлы сборки — с
+  `immutable`: браузер/CDN не хранит старый HTML со ссылками на удалённые `/assets/*`;
+- на старте проверяет сборку и пишет в лог, каких файлов из `index.html` не хватает:
+  `Сборка frontend неполная/устаревшая: index.html ссылается на отсутствующие файлы ...`;
+- `GET /health` показывает `"frontend_built": true|false` — быстрая проверка на хосте.
+
+Если в прод-логах `GET /assets/*.js 404`, а `/` отдаётся — значит на сервере нет
+`frontend/dist/assets` (не собрано / не задеплоено). Лечится пересборкой выше;
+после деплоя сбросьте кэш `index.html` в CDN (Cloudflare: Purge Everything или
+by URL `/`).
+
 ---
 
 ## ⚙️ Переменные окружения
