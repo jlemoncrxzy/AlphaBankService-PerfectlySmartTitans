@@ -369,6 +369,7 @@ pip install -r requirements.txt && cd frontend && npm ci && npm run build
 | `GET` | `/api/news` | любая | Новости + PDF-аналитика единой лентой |
 | `GET` | `/api/analytics` | любая | Аналитические материалы |
 | `GET` | `/api/dashboard?companyId=` | — | Всё для React-дашборда одним запросом |
+| `GET` | `/api/counterparties?companyId=` | — | Граф контрагентов: обороты, доли, концентрация |
 | `POST` | `/api/news/{id}/chat` | — | AI-чат по конкретному событию |
 | `POST` | `/api/companies/{id}/report` | — | DOCX-отчёт по шаблону (multipart) |
 | `GET` | `/health` | — | Статус, провайдер и модель LLM |
@@ -427,7 +428,7 @@ AlphaBankService/
 │   │   ├── heuristics.py      # детерминированные правила
 │   │   ├── text.py            # чистка OCR, нормализация текста
 │   │   └── document_overrides.py
-│   ├── routers/               # auth · clients · news · runs · dashboard · reports
+│   ├── routers/               # auth · clients · news · runs · dashboard · counterparties · reports
 │   ├── static/                # legacy UI без сборки
 │   ├── config.py              # pydantic-settings
 │   ├── models.py              # ORM: клиенты, события, прогоны, чанки, логи
@@ -440,7 +441,7 @@ AlphaBankService/
 │   ├── generate_insights.py   # пакетный прогон
 │   └── main.py                # точка входа FastAPI
 ├── frontend/                  # React 18 + Vite 6
-│   ├── src/App.jsx            # дашборд, лента, чат, модалка отчёта
+│   ├── src/App.jsx            # дашборд, лента, чат, аналитика, контрагенты, модалка отчёта
 │   └── src/api/client.js      # API-клиент
 ├── data/
 │   ├── raw/                   # исходные CSV и PDF

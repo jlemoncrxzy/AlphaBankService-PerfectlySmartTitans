@@ -163,6 +163,7 @@ def run_ingestion():
             counterparties.append({
                 "name": f"ООО Поставщик {s['name']}",
                 "role": "supplier",
+                "amountRub": round(float(s['amount']), 2),
                 "share": f"{s['amount'] / 1e6:.1f} млн руб."
             })
         # Достаем заранее подготовленных покупателей из словаря
@@ -170,6 +171,7 @@ def run_ingestion():
             counterparties.append({
                 "name": f"ООО Покупатель {c['name']}",
                 "role": "customer",
+                "amountRub": round(float(c['amount']), 2),
                 "share": f"{c['amount'] / 1e6:.1f} млн руб."
             })
             

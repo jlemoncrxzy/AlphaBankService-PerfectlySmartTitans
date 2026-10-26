@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .database import Base, engine
 from .seed import seed
-from .routers import auth, clients, news, runs, dashboard, reports
+from .routers import auth, clients, news, runs, dashboard, reports, counterparties
 
 # Пути считаем от корня проекта, а не от текущей рабочей директории:
 # на сервере uvicorn может запускаться из любого каталога.
@@ -94,6 +94,7 @@ app.include_router(news.router)
 app.include_router(runs.router)
 app.include_router(dashboard.router) # <--- Роутер для React-дашборда
 app.include_router(reports.router)  # <--- Выгрузка DOCX-отчёта по компании
+app.include_router(counterparties.router)  # <--- Раздел «Контрагенты»
 
 # Раздача статики React. Монтируем всегда: если сборки нет — будет аккуратный 404/503,
 # а не падение на импорте и не «потерянные» маршруты после пересборки на ходу.

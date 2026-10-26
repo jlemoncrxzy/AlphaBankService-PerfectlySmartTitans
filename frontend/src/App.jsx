@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { askNewsQuestion, downloadCompanyReport, getDashboard } from './api/client.js'
+import { askNewsQuestion, downloadCompanyReport, getCounterparties, getDashboard } from './api/client.js'
 
 const ALL_INDUSTRIES = 'Все отрасли'
 const PLACEHOLDER_HINT = '{{company_name}}, {{industry}}, {{revenue}}, {{region}}, {{products}}, {{date}}, {{report_title}}'
 
 const HOME_PAGE = 'Главная'
 const ANALYTICS_PAGE = 'Аналитика'
+const COUNTERPARTIES_PAGE = 'Контрагенты'
 
 const CHART_SERIES = [
   { key: 'risks', label: 'Риски', color: '#ef3124' },
@@ -44,6 +45,12 @@ function formatCount(value) {
   return Number.isFinite(amount) ? amount.toLocaleString('ru-RU') : '—'
 }
 
+function formatPercent(value) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '—'
+  return `${amount.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
+}
+
 function parseDate(value) {
   if (!value) return null
   const date = new Date(value)
@@ -80,6 +87,15 @@ function companiesLabel(count) {
   if (absolute > 10 && absolute < 20) return `${count} компаниях`
   if (lastDigit === 1) return `${count} компании`
   return `${count} компаниях`
+}
+
+function counterpartyLabel(count) {
+  const absolute = Math.abs(count) % 100
+  const lastDigit = absolute % 10
+  if (absolute > 10 && absolute < 20) return 'контрагентов'
+  if (lastDigit === 1) return 'контрагент'
+  if (lastDigit >= 2 && lastDigit <= 4) return 'контрагента'
+  return 'контрагентов'
 }
 
 function Icon({ name, size = 18 }) {
@@ -727,6 +743,239 @@ function AnalyticsPage({ company, dashboard, series, monthSeries, range, onRange
   )
 }
 
+const CONCENTRATION_NOTES = {
+  high: 'Высокая зависимость: один контрагент даёт больше половины оборота с контрагентами.',
+  medium: 'Умеренная концентрация: стоит следить за долей топ-контрагента в расчётах.',
+  low: 'Оборот распределён ровно, критичной зависимости от одного контрагента нет.',
+}
+
+function CounterpartiesPage({ company, data, loading, error, onRetry, onHome }) {
+  const [query, setQuery] = useState('')
+  const [role, setRole] = useState('all')
+  const [sortKey, setSortKey] = useState('amount')
+
+  const items = data?.items || []
+  const summary = data?.summary
+  const payments = data?.payments || {}
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const filtered = items.filter((item) => {
+      if (role !== 'all' && item.role !== role) return false
+      if (!needle) return true
+      return `${item.name} ${item.rawName || ''} ${item.roleLabel}`.toLowerCase().includes(needle)
+    })
+    if (sortKey === 'name') {
+      return [...filtered].sort((left, right) => left.name.localeCompare(right.name, 'ru', { numeric: true }))
+    }
+    if (sortKey === 'share') {
+      return [...filtered].sort((left, right) => right.share - left.share)
+    }
+    return [...filtered].sort((left, right) => right.amountRub - left.amountRub)
+  }, [items, query, role, sortKey])
+
+  const roles = [
+    { key: 'all', label: 'Все' },
+    { key: 'supplier', label: 'Поставщики' },
+    { key: 'customer', label: 'Покупатели' },
+  ]
+
+  const metrics = [
+    { key: 'total', label: 'Всего контрагентов', value: formatCount(summary?.count), small: `${formatMoney(summary?.totalAmountRub)} в обороте` },
+    { key: 'supplier', label: 'Поставщики', value: formatCount(summary?.suppliers), small: `${formatMoney(summary?.supplierAmountRub)} исходящих` },
+    { key: 'customer', label: 'Покупатели', value: formatCount(summary?.customers), small: `${formatMoney(summary?.customerAmountRub)} входящих` },
+    {
+      key: 'top',
+      label: 'Крупнейший',
+      value: summary?.top ? formatPercent(summary.top.share) : '—',
+      small: summary?.top ? summary.top.name : 'нет данных',
+    },
+  ]
+
+  return (
+    <div className="counterparties-page">
+      <section className="analytics-hero">
+        <div className="analytics-hero-copy">
+          <span className="analytics-kicker">КОНТРАГЕНТЫ · {String(company?.name || 'компания').toUpperCase()}</span>
+          <h2>Кто формирует оборот компании</h2>
+          <p>Граф контрагентов из платёжной выгрузки: топ-поставщики и покупатели по сумме операций. Доля считается от оборота с контрагентами в профиле компании.</p>
+        </div>
+        <div className="analytics-metrics cp-metrics">
+          {metrics.map((metric) => (
+            <div className={`analytics-metric cp-metric ${metric.key}`} key={metric.key}>
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+              <small>{metric.small}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {error && <div className="load-error" role="alert">{error} <button type="button" onClick={onRetry}>Повторить</button></div>}
+
+      <div className="cp-layout">
+        <section className="cp-card">
+          <div className="cp-card-head">
+            <div>
+              <h3>Контрагенты компании</h3>
+              <small>
+                {summary?.count
+                  ? `${summary.count} ${counterpartyLabel(summary.count)} · ${formatMoney(summary.totalAmountRub)} оборота`
+                  : 'Нет операций с контрагентами'}
+              </small>
+            </div>
+            <div className="cp-tools">
+              <label className="cp-search">
+                <Icon name="search" size={13} />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Найти контрагента"
+                  aria-label="Поиск по контрагентам"
+                />
+              </label>
+              <div className="analytics-switch" role="group" aria-label="Тип контрагента">
+                {roles.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={role === item.key ? 'active' : ''}
+                    aria-pressed={role === item.key}
+                    onClick={() => setRole(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="loading-card">Загружаем граф контрагентов…</div>
+          ) : !summary?.count ? (
+            <div className="cp-empty">
+              <span className="cp-empty-icon"><Icon name="users" size={20} /></span>
+              <h3>Контрагенты не найдены</h3>
+              <p>По этой компании в платёжной выгрузке нет операций с контрагентами. Данные появятся после импорта CSV.</p>
+              <button className="primary-button" type="button" onClick={onHome}>Вернуться на главную <Icon name="arrow" size={15} /></button>
+            </div>
+          ) : visible.length ? (
+            <div className="cp-table-wrap">
+              <table className="cp-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <button type="button" className={sortKey === 'name' ? 'active' : ''} onClick={() => setSortKey('name')}>
+                        Контрагент {sortKey === 'name' && <Icon name="chevron" size={11} />}
+                      </button>
+                    </th>
+                    <th>Роль</th>
+                    <th>
+                      <button type="button" className={sortKey === 'amount' ? 'active' : ''} onClick={() => setSortKey('amount')}>
+                        Оборот {sortKey === 'amount' && <Icon name="chevron" size={11} />}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={sortKey === 'share' ? 'active' : ''} onClick={() => setSortKey('share')}>
+                        Доля в обороте {sortKey === 'share' && <Icon name="chevron" size={11} />}
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <div className="cp-name">
+                          <span className={`cp-avatar ${item.role}`}><Icon name="users" size={14} /></span>
+                          <span>
+                            <strong>{item.name}</strong>
+                            <small>{item.direction}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td><span className={`cp-role ${item.role}`}>{item.roleLabel}</span></td>
+                      <td className="cp-amount">{formatMoney(item.amountRub)}</td>
+                      <td>
+                        <div className="cp-share">
+                          <span className="cp-share-value">{formatPercent(item.share)}</span>
+                          <span className="cp-share-track">
+                            <span className={`cp-share-fill ${item.role}`} style={{ width: `${Math.min(100, Math.max(3, item.share))}%` }} />
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="cp-no-results">Ничего не нашлось по запросу «{query}».</div>
+          )}
+
+          {summary?.count ? (
+            <p className="cp-table-note">
+              Имена контрагентов в выгрузке обезличены — банк показывает их идентификаторы U_xxx.
+              Доля = сумма операций с контрагентом / сумма операций со всеми контрагентами профиля.
+              {summary.lowValueCount > 0
+                ? ` Ещё ${summary.lowValueCount} ${counterpartyLabel(summary.lowValueCount)} с оборотом менее 0,1 млн ₽ — не в таблице.`
+                : ''}
+            </p>
+          ) : null}
+        </section>
+
+        <aside className="cp-side">
+          <section className="side-card cp-side-card">
+            <h3>Концентрация оборота</h3>
+            <p className="side-card-description">Чем выше доля одного контрагента, тем сильнее компания зависит от него в расчётах.</p>
+            {summary?.count ? (
+              <>
+                <div className="distribution-list">
+                  {[
+                    { label: 'Крупнейший контрагент', value: summary.topShare },
+                    { label: 'Топ-3 контрагента', value: summary.top3Share },
+                  ].map((row) => (
+                    <div className="distribution-row" key={row.label}>
+                      <div className="distribution-caption">
+                        <span>{row.label}</span>
+                        <b>{formatPercent(row.value)}</b>
+                      </div>
+                      <div className="distribution-track">
+                        <span
+                          style={{
+                            width: `${Math.min(100, row.value)}%`,
+                            background: row.value >= 50 ? 'var(--red)' : row.value >= 30 ? 'var(--honey)' : '#8743cb',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className={`cp-risk-note ${summary.concentration.level}`}>
+                  {CONCENTRATION_NOTES[summary.concentration.level] || ''}
+                </p>
+              </>
+            ) : (
+              <p className="distribution-empty">Нет данных для расчёта концентрации.</p>
+            )}
+          </section>
+
+          <section className="side-card cp-side-card">
+            <h3>Откуда данные</h3>
+            <p className="side-card-description">{data?.meta?.note || 'Топ-5 поставщиков и топ-5 покупателей по сумме операций.'}</p>
+            <dl>
+              <div><dt>Источник</dt><dd>{data?.meta?.source || 'Платёжная выгрузка банка'}</dd></div>
+              <div><dt>Списания по счёту</dt><dd>{payments.hasData ? formatMoney(payments.outgoingRub) : '—'}</dd></div>
+              <div><dt>Поступления по счёту</dt><dd>{payments.hasData ? formatMoney(payments.incomingRub) : '—'}</dd></div>
+              <div><dt>Плательщиков всего</dt><dd>{payments.hasData ? formatCount(payments.incomingCounterparties) : '—'}</dd></div>
+            </dl>
+          </section>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
 function splitKeywords(values = []) {
   const seen = new Set()
   const result = []
@@ -1279,6 +1528,10 @@ function App() {
   const [filters, setFilters] = useState(emptyFilters)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [analyticsRange, setAnalyticsRange] = useState('runs')
+  const [counterparties, setCounterparties] = useState(null)
+  const [counterpartiesLoading, setCounterpartiesLoading] = useState(false)
+  const [counterpartiesError, setCounterpartiesError] = useState('')
+  const [counterpartiesReloadKey, setCounterpartiesReloadKey] = useState(0)
   const headerActionsRef = useRef(null)
   const filtersRef = useRef(null)
 
@@ -1302,6 +1555,28 @@ function App() {
   }, [companyId, reloadKey])
 
   const company = dashboard?.company
+  const activeCompanyId = company?.id || companyId
+
+  // Раздел «Контрагенты» грузится отдельным запросом только когда он открыт.
+  useEffect(() => {
+    if (activePage !== COUNTERPARTIES_PAGE || !activeCompanyId) return undefined
+    let isCurrent = true
+    setCounterpartiesLoading(true)
+    setCounterpartiesError('')
+
+    getCounterparties(activeCompanyId)
+      .then((data) => {
+        if (isCurrent) setCounterparties(data)
+      })
+      .catch((error) => {
+        if (isCurrent) setCounterpartiesError(error.message || 'Не удалось загрузить контрагентов.')
+      })
+      .finally(() => {
+        if (isCurrent) setCounterpartiesLoading(false)
+      })
+
+    return () => { isCurrent = false }
+  }, [activePage, activeCompanyId, counterpartiesReloadKey])
   const industryOptions = useMemo(() => {
     const values = new Set()
     ;(dashboard?.news || []).forEach((item) => {
@@ -1312,7 +1587,14 @@ function App() {
 
   const isHome = activePage === HOME_PAGE
   const isAnalytics = activePage === ANALYTICS_PAGE
-  const pageEyebrow = isHome ? 'БИЗНЕС В КОНТЕКСТЕ' : isAnalytics ? 'ДИНАМИКА И ТРЕНДЫ' : 'РАЗДЕЛ В РАЗРАБОТКЕ'
+  const isCounterparties = activePage === COUNTERPARTIES_PAGE
+  const pageEyebrow = isHome
+    ? 'БИЗНЕС В КОНТЕКСТЕ'
+    : isAnalytics
+      ? 'ДИНАМИКА И ТРЕНДЫ'
+      : isCounterparties
+        ? 'ГРАФ КОНТРАГЕНТОВ'
+        : 'РАЗДЕЛ В РАЗРАБОТКЕ'
   const pageTitle = isHome ? 'Новостная аналитика для бизнеса' : isAnalytics ? 'Аналитика' : activePage
   const interestsCount = interests
     ? interests.industries.length + interests.regions.length + interests.products.length + interests.keywords.length
@@ -1423,6 +1705,8 @@ function App() {
     setInterests(null)
     setFilters(emptyFilters())
     setFiltersOpen(false)
+    setCounterparties(null)
+    setCounterpartiesError('')
     setCompanyId(nextCompanyId)
   }
 
@@ -1488,7 +1772,7 @@ function App() {
           </div>
         </header>
 
-        {(isHome || isAnalytics) && <div className="company-toolbar">
+        {(isHome || isAnalytics || isCounterparties) && <div className="company-toolbar">
           <label className="company-picker">
             <span className="company-icon"><img src="/icons/company-building.png" alt="" /></span>
             <span><small>Моя компания</small>
@@ -1647,7 +1931,18 @@ function App() {
           />
         )}
 
-        {!isHome && !isAnalytics && <ComingSoonPage title={activePage} onHome={goHome} />}
+        {isCounterparties && (
+          <CounterpartiesPage
+            company={company}
+            data={counterparties}
+            loading={counterpartiesLoading && !counterparties}
+            error={counterpartiesError}
+            onRetry={() => setCounterpartiesReloadKey((key) => key + 1)}
+            onHome={goHome}
+          />
+        )}
+
+        {!isHome && !isAnalytics && !isCounterparties && <ComingSoonPage title={activePage} onHome={goHome} />}
 
         <footer className="page-footer"><span>© 2026 АО «Альфа-Банк»</span><span>Конфиденциальность · О сервисе</span></footer>
       </main>

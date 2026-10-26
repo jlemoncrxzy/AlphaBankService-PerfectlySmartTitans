@@ -5,6 +5,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 export const API_ENDPOINTS = {
   dashboard: '/api/dashboard',
+  counterparties: '/api/counterparties',
   newsChat: (newsId) => `/api/news/${newsId}/chat`,
 }
 
@@ -34,6 +35,10 @@ async function request(path, options = {}) {
 export async function getDashboard(companyId) {
   // Убрали проверку на if (!API_BASE_URL). Теперь всегда делаем запрос на бэкенд.
   return request(`${API_ENDPOINTS.dashboard}?companyId=${encodeURIComponent(companyId)}`)
+}
+
+export async function getCounterparties(companyId) {
+  return request(`${API_ENDPOINTS.counterparties}?companyId=${encodeURIComponent(companyId || '')}`)
 }
 
 export async function askNewsQuestion(newsId, question) {
