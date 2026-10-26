@@ -331,6 +331,35 @@ pip install -r requirements.txt && cd frontend && npm ci && npm run build
 `frontend/dist/assets` (не собрано / не закоммичено). После деплоя сбросьте кэш
 `index.html` в CDN (Cloudflare: Purge Everything или by URL `/`).
 
+### 8. Docker
+
+В репозитории лежат `Dockerfile` (multi-stage: Node собирает UI → Python-рантайм),
+`docker-compose.yml` и `.dockerignore`.
+
+```bash
+docker compose up --build -d                                  # http://localhost:8080
+docker compose logs -f api
+docker compose run --rm api python -m app.debug_ingest_csv    # загрузка CSV
+docker compose run --rm api python -m app.refresh_insights    # генерация инсайтов
+```
+
+Что важно знать:
+
+- `data/` монтируется томом `./data:/app/data` — БД, CSV/PDF и `payment_stats.json`
+  остаются на хосте, в образ попадает только `data/report_template_example.docx`;
+- `.env` в образ **не** копируется: переменные берутся из `environment`/`env_file`;
+- образ по умолчанию лёгкий — PDF/OCR (easyocr + torch ~3 ГБ) и LibreOffice выключены:
+  ```bash
+  docker build -t alfa-insight:full \
+    --build-arg INSTALL_DEV_DEPS=true \
+    --build-arg INSTALL_LIBREOFFICE=true .
+  ```
+- фронтенд собирается внутри образа, поэтому `frontend/dist` для Docker не нужен
+  (но он всё равно лежит в репозитории — для деплоя на Render);
+- контейнер работает не от root (uid 10001); на Linux-хосте каталог `data/` должен быть
+  ему доступен: `sudo chown -R 10001:10001 data`;
+- health-check бьёт в `GET /health`, порт задаётся переменной `PORT` (по умолчанию 8080).
+
 ---
 
 ## ⚙️ Переменные окружения
@@ -448,6 +477,9 @@ AlphaBankService/
 │   └── payment_stats.json     # кэш платёжных агрегатов
 ├── requirements.txt           # ядро
 ├── requirements-dev.txt       # PDF / OCR
+├── Dockerfile                 # multi-stage: Vite-сборка + FastAPI-рантайм
+├── docker-compose.yml         # локальный запуск с томом ./data
+├── .dockerignore
 └── .env.example
 ```
 

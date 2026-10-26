@@ -1,0 +1,50 @@
+# Контекст сборки: всё, что не нужно внутри образа.
+
+# Git / IDE
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+
+# Python
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.coverage
+htmlcov
+
+# Node
+node_modules
+frontend/node_modules
+frontend/dist
+
+# Секреты — только через env/переменные окружения
+.env
+.env.*
+!.env.example
+
+# Локальные данные и артефакты (монтируются томом /app/data)
+data/*
+!data/report_template_example.docx
+*.db
+*.db-wal
+*.db-shm
+*.log
+logs
+*.tmp
+*.bak
+
+# Документация и скриншоты
+README.md
+frontend/README.md
+.tmp-*
+*.png
+!frontend/public/**/*.png

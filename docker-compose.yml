@@ -1,0 +1,40 @@
+# Локальный запуск «как на проде»: docker compose up --build
+# Для Render/Railway это не нужно — там достаточно Dockerfile.
+
+name: alfa-insight
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # true → + pdfplumber / PyMuPDF / easyocr (torch ~3 ГБ), нужен для app.debug_ingest_pdf
+        INSTALL_DEV_DEPS: "false"
+        # true → + LibreOffice, нужен для конвертации legacy .doc шаблонов отчёта
+        INSTALL_LIBREOFFICE: "false"
+    image: alfa-insight:local
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      # Абсолютный путь: SQLite-файл лежит в примонтированном каталоге data/
+      DATABASE_URL: sqlite:////app/data/app.db
+    # Переменные из .env прокидываются как есть (файл необязателен, compose >= 2.24).
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # БД, CSV/PDF и payment_stats.json остаются на хосте между перезапусками.
+      - ./data:/app/data
+    restart: unless-stopped
+
+# Полезные команды:
+#   docker compose logs -f api
+#   docker compose run --rm api python -m app.debug_ingest_csv
+#   docker compose run --rm api python -m app.sync_metrics
+#   docker compose run --rm api python -m app.refresh_insights
+#   docker compose exec api python -m app.check_db
+#
+# Linux-хост: каталог data/ должен быть доступен пользователю контейнера (uid 10001):
+#   sudo chown -R 10001:10001 data
